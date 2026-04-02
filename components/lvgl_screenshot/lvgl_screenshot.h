@@ -9,9 +9,7 @@ namespace lvgl_screenshot {
 class LVGLScreenshot : public Component {
  public:
   void setup() override;
-  // This function takes the snapshot and saves it as a PNG
   void save_png(const std::string &filename);
-  
   float get_setup_priority() const override { return esphome::setup_priority::LATE; }
 };
 
