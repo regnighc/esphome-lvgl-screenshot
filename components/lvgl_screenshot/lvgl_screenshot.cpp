@@ -1,10 +1,26 @@
 #include "lvgl_screenshot.h"
-#include "lodepng.h"
 #include "esphome/core/log.h"
 #include <lvgl.h>
 #include <src/extra/others/snapshot/lv_snapshot.h>
 #include <cstdio>
-#include "esp_heap_caps.h" // Required for explicit PSRAM allocation
+#include "esp_heap_caps.h"
+
+// --- LodePNG Memory Override ---
+// This forces LodePNG to use PSRAM instead of Internal RAM
+#include <stdlib.h>
+#define LODEPNG_NO_COMPILE_ALLOCATORS
+void* lodepng_malloc(size_t size) {
+    return heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+}
+void* lodepng_realloc(void* ptr, size_t new_size) {
+    return heap_caps_realloc(ptr, new_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+}
+void lodepng_free(void* ptr) {
+    heap_caps_free(ptr);
+}
+// Now include the actual lodepng code
+#include "lodepng.h"
+// -------------------------------
 
 namespace esphome {
 namespace lvgl_screenshot {
@@ -18,14 +34,14 @@ void LVGLScreenshot::save_png(const std::string &filename) {
     uint32_t w = lv_obj_get_width(screen);
     uint32_t h = lv_obj_get_height(screen);
 
-    ESP_LOGI(TAG, "Capturing %ux%u PNG...", w, h);
+    ESP_LOGI(TAG, "Capturing %ux%u PNG to PSRAM...", w, h);
 
     // 1. Take Snapshot
-    // LVGL will use its own memory manager (which you routed to PSRAM)
+    // Note: LVGL is already routed to PSRAM via your sdkconfig
     lv_img_dsc_t *snapshot = lv_snapshot_take(screen, LV_IMG_CF_TRUE_COLOR_ALPHA);
     
     if (snapshot == nullptr) {
-        ESP_LOGE(TAG, "Snapshot failed! LVGL memory full.");
+        ESP_LOGE(TAG, "Snapshot failed! LVGL PSRAM heap is full.");
         return;
     }
 
@@ -38,26 +54,26 @@ void LVGLScreenshot::save_png(const std::string &filename) {
     }
 
     // 3. Encode to PNG
-    // We use a custom allocator for LodePNG to ensure it uses PSRAM
     std::string full_path = "/sdcard/" + filename;
     unsigned char* png_out = nullptr;
     size_t png_size = 0;
 
-    // Use a LodePNG state to customize allocation
-    LodePNGState state;
-    lodepng_state_init(&state);
-    
-    // Perform encoding
-    unsigned int error = lodepng_encode(&png_out, &png_size, data, w, h, &state);
+    // Because of the overrides above, this will now use PSRAM
+    unsigned int error = lodepng_encode32(&png_out, &png_size, data, w, h);
 
     if (!error) {
         FILE *f = fopen(full_path.c_str(), "wb");
         if (f) {
-            fwrite(png_out, 1, png_size, f);
+            // Write in chunks to avoid stressing the SPI bus
+            size_t written = fwrite(png_out, 1, png_size, f);
             fclose(f);
-            ESP_LOGI(TAG, "Saved: %s", full_path.c_str());
+            if (written == png_size) {
+                ESP_LOGI(TAG, "Successfully saved %s (%u bytes)", full_path.c_str(), (uint32_t)png_size);
+            } else {
+                ESP_LOGE(TAG, "SD Write incomplete. Card full?");
+            }
         } else {
-            ESP_LOGE(TAG, "SD Card error.");
+            ESP_LOGE(TAG, "SD Card error: Could not open file.");
         }
     } else {
         ESP_LOGE(TAG, "PNG Error: %s", lodepng_error_text(error));
@@ -65,8 +81,7 @@ void LVGLScreenshot::save_png(const std::string &filename) {
 
     // 4. Cleanup
     lv_snapshot_free(snapshot);
-    if(png_out) free(png_out);
-    lodepng_state_cleanup(&state);
+    if(png_out) lodepng_free(png_out);
 }
 
 }  // namespace lvgl_screenshot
