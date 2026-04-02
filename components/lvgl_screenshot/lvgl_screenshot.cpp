@@ -1,4 +1,7 @@
 #include "lvgl_screenshot.h"
+#include "lodepng.h"
+#include "esphome/core/log.h"
+#include <cstdio>
 
 namespace esphome {
 namespace lvgl_screenshot {
@@ -6,41 +9,51 @@ namespace lvgl_screenshot {
 static const char *const TAG = "lvgl_screenshot";
 
 void LVGLScreenshot::setup() {
-  ESP_LOGI(TAG, "LVGL Screenshot component initialized.");
+    ESP_LOGI(TAG, "LVGL PNG Screenshot component ready (PSRAM optimized).");
 }
 
-void LVGLScreenshot::dump_config() {
-  ESP_LOGCONFIG(TAG, "LVGL Screenshot");
-}
+void LVGLScreenshot::save_png(const std::string &filename) {
+    lv_obj_t *screen = lv_scr_act();
+    uint32_t w = lv_obj_get_width(screen);
+    uint32_t h = lv_obj_get_height(screen);
 
-void LVGLScreenshot::take_snapshot() {
-  lv_obj_t *screen = lv_scr_act();
-  
-  // Calculate size for RGB565 (2 bytes per pixel)
-  uint32_t width = lv_obj_get_width(screen);
-  uint32_t height = lv_obj_get_height(screen);
-  uint32_t buffer_size = width * height * 2;
+    ESP_LOGI(TAG, "Capturing %ux%u PNG...", w, h);
 
-  ESP_LOGI(TAG, "Capturing %dx%d screenshot...", width, height);
+    // 1. Take snapshot in ARGB8888 (LVGL 9 native format for high-quality capture)
+    lv_draw_buf_t* snapshot = lv_snapshot_take(screen, LV_COLOR_FORMAT_ARGB8888);
+    
+    if (snapshot == nullptr || snapshot->data == nullptr) {
+        ESP_LOGE(TAG, "Failed to take LVGL snapshot.");
+        return;
+    }
 
-  // Allocate from PSRAM (required for large screens)
-  void *buf = malloc(buffer_size);
+    // 2. Encode to PNG using LodePNG
+    // lodepng_encode_file(filename, data, width, height, colortype, bitdepth)
+    std::string full_path = "/sdcard/" + filename;
+    
+    // We use state-based encoding to ensure we can handle the memory 
+    unsigned char* png_out = nullptr;
+    size_t png_size = 0;
+    
+    // ARGB8888 to PNG (LodePNG expects RGBA8888)
+    unsigned int error = lodepng_encode32(&png_out, &png_size, (unsigned char*)snapshot->data, w, h);
 
-  if (buf == nullptr) {
-    ESP_LOGE(TAG, "Memory allocation failed! Not enough RAM.");
-    return;
-  }
+    if (!error) {
+        FILE *f = fopen(full_path.c_str(), "wb");
+        if (f) {
+            fwrite(png_out, 1, png_size, f);
+            fclose(f);
+            ESP_LOGI(TAG, "Success! Saved to %s (%u bytes)", full_path.c_str(), (uint32_t)png_size);
+        } else {
+            ESP_LOGE(TAG, "Failed to open SD card file for writing.");
+        }
+    } else {
+        ESP_LOGE(TAG, "PNG Encoder Error %u: %s", error, lodepng_error_text(error));
+    }
 
-  lv_res_t res = lv_snapshot_take(screen, LV_IMG_CF_TRUE_COLOR, (lv_snapshot_dsc_t *)buf);
-
-  if (res == LV_RES_OK) {
-    ESP_LOGI(TAG, "Snapshot success. Buffer address: %p", buf);
-    // Logic to save/send 'buf' goes here
-  } else {
-    ESP_LOGE(TAG, "LVGL failed to take snapshot.");
-  }
-
-  free(buf);
+    // 3. Cleanup
+    free(png_out);
+    lv_draw_buf_destroy(snapshot);
 }
 
 }  // namespace lvgl_screenshot
