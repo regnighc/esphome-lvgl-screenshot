@@ -15,6 +15,5 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     
-    # ONLY enable the snapshot feature. 
-    # Do NOT add SPIRAM flags here; they belong in the main YAML/Board config.
+    # This enables the snapshot code inside LVGL without affecting system RAM
     cg.add_build_flag("-DLV_USE_SNAPSHOT=1")
