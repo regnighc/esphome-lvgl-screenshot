@@ -30,6 +30,10 @@ static const char *const TAG = "lvgl_screenshot";
 void LVGLScreenshot::setup() {}
 
 void LVGLScreenshot::save_png(const std::string &filename) {
+    // Add this debug line at the very top of the function
+    size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    ESP_LOGI(TAG, "Free PSRAM before capture: %u bytes", free_psram);
+    
     lv_obj_t *screen = lv_scr_act();
     uint32_t w = lv_obj_get_width(screen);
     uint32_t h = lv_obj_get_height(screen);
